@@ -20,6 +20,11 @@ import tank
 
 import pymel.core as pm
 
+import shlex, subprocess 
+
+from sgtk.platform.qt import QtCore
+
+from tank_vendor.shotgun_api3 import Shotgun
 
 class MayaPlayblast(Application):
 
@@ -42,8 +47,8 @@ class MayaPlayblast(Application):
         """
         Callback from when the menu is clicked.
         """
-        width = self.get_setting("width", 1920)
-        height = self.get_setting("height", 1080)
+        width = self.get_setting("width", 1024)
+        height = self.get_setting("height", 540)
         start_frame = pm.animation.playbackOptions(query=True, minTime=True)
         end_frame = pm.animation.playbackOptions(query=True, maxTime=True)
 
@@ -86,6 +91,48 @@ class MayaPlayblast(Application):
             width=width, height=height, percent=100,
             showOrnaments=False, viewer=True,
             sequenceTime=False, framePadding=4, clearCache=True)
+        #convert with ffmpeg
+        ffmpeg = '//ALFRED/Post-3D-VFX/TheMostCurrentSoftware/ffmpeg/bin/ffmpeg.exe'
+        fps = 25
+        imgSeqPath = playblast_path.replace('\\','/') + '.%04d.png'
+        movpath = playblast_path.replace('\\','/') + '.mov'
+
+        enc = '%s -y -start_number %s -r %s -i %s -c:v libx264 -crf 23 -preset medium -c:a libfdk_aac -vbr 4 %s' % (ffmpeg, int(start_frame), fps, imgSeqPath, movpath)
+        print enc
+        subprocess.call(shlex.split(enc), shell = True)
+        
+        #get the context
+        tk = tank.sgtk_from_path(movpath)
+        ctx = tk.context_from_path(movpath)
+
+        #connected to the shotgun api
+        SERVER_PATH = tk.shotgun_url
+        SCRIPT_USER = 'sg_script'
+        SCRIPT_KEY = '3e48411af231488a1e1c1a94c00468ee1d89ef34f22fe4067a1057416fd9e11d'
+        sg = Shotgun(SERVER_PATH, SCRIPT_USER, SCRIPT_KEY)
+
+        #data for new version, should add a ui with comments
+        data = { 'project': {'type':'Project','id':ctx.project['id']},
+         'code': ('%s_%s_%s_v%s_playblast' %(ctx.entity['name'],ctx.step['name'],name,version)),
+         'description': 'Maya Playblast',
+         'sg_path_to_frames': movpath,
+         'entity': {'type':'Shot', 'id':ctx.entity['id']},
+         'user': {'type':'HumanUser', 'id':ctx.user['id']} }
+        #create version
+        result = sg.create('Version', data)
+        #print result
+        sgurl =  ('%s/detail/Version/%s' %(SERVER_PATH,result['id']))
+
+
+        #upload quicktime
+        result = sg.upload("Version",result['id'],movpath,"sg_uploaded_movie")
+        #print result
+        result = pm.confirmDialog(
+            title='Shotgun Playblast',
+            message='Uploaded Playblast: ' + sgurl,
+            button=['OK'],
+            defaultButton='OK')
+
 
         # Reset display states
         pm.windows.modelEditor('modelPanel4', edit=True, nurbsCurves=sel_nurbs_curves)
